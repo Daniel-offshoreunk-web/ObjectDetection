@@ -11,6 +11,50 @@ bias1 = np.array([0.9, 0.9, 0.9, 0.9])
 weights2 = np.array([[2.0], [2.0], [2.0], [2.0]])
 bias2 = np.array([-1.0])
 
+class BallTracker:
+    _id_count = 0
+    
+    def __init__(self, cx, cy, radius, confidence, x, y, max_lost_frames=5, required_consecutive_hits=5):
+        self.id = BallTracker._id_count
+        BallTracker._id_count += 1
+        
+        # Current data
+        self.cx = cx
+        self.cy = cy
+        self.radius = radius
+        self.confidence = confidence
+        self.x = x
+        self.y = y
+        
+        # Set up tracker
+        self.consecutive_hits = 1
+        self.lost_frame_counter = 0
+        self.max_lost_frames = max_lost_frames
+        self.required_consecutive_hits = required_consecutive_hits
+        self.is_locked = False
+        self.updated_this_frame = True
+
+    def update_match(self, cx, cy, radius, confidence, x, y):
+        self.lost_frame_counter = 0
+        self.consecutive_hits += 1
+        self.updated_this_frame = True
+        
+        # Update
+        self.cx, self.cy, self.radius, self.confidence = cx, cy, radius, confidence
+        self.x, self.y = x, y
+        
+        if self.consecutive_hits >= self.required_consecutive_hits:
+            self.is_locked = True
+
+    def update_miss(self):
+        self.consecutive_hits = 0
+        self.lost_frame_counter += 1
+        self.updated_this_frame = False
+        
+        if self.lost_frame_counter >= self.max_lost_frames:
+            self.is_locked = False
+            self.confidence = 0.0
+
 def sigmoid(x):
     return 1/(1+np.exp(-x))
 def ai_predict(circularity, aspect_ratio):
@@ -22,6 +66,9 @@ def ai_predict(circularity, aspect_ratio):
     # Layer 2
     output = sigmoid(np.dot(hidden, weights2) + bias2)
     return output[0]
+
+active_trackers = []
+
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -49,6 +96,8 @@ while True:
     #Finds all sides of the blob
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
+    blobs =[]
+
     for contour in contours:
         area = cv2.contourArea(contour)
         if 500000>area> 1000: # Needs to be bigger than 5x10 and no bigger than 5000x100
@@ -64,13 +113,47 @@ while True:
             
             #returns a percent
             confidence = ai_predict(circularity, aspect_ratio)
-            
-            # Good enough?
-            if confidence > 0.8 and circularity > 0.6:
-                # Point at it
-                cv2.circle(frame, (int(cx), int(cy)), int(radius), (0, 255, 0), 3)
-                text = f"Ball: {confidence*100:.1f}%"
-                cv2.putText(frame, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            if confidence >= 0.9:
+                    blobs.append((cx, cy, radius, confidence, x, y))
+    for tracker in active_trackers:
+        tracker.updated_this_frame=False
+    for blob in blobs:
+        bcx, bcy, bradius, bconf, bx, by = blob
+        
+        closest_tracker = None
+        min_distance = 45.0
+
+        for tracker in active_trackers:
+            if tracker.updated_this_frame:
+                continue
+            distance = np.sqrt((bcx - tracker.cx)**2 + (bcy - tracker.cy)**2)
+            if distance < min_distance:
+                min_distance = distance
+                closest_tracker = tracker
+        if not closest_tracker==None:
+            closest_tracker.update_match(bcx, bcy, bradius, bconf, bx, by)
+        else:
+            new_tracker = BallTracker(bcx, bcy, bradius, bconf, bx, by)
+            active_trackers.append(new_tracker)
+    for tracker in active_trackers:
+        if not tracker.updated_this_frame:
+            tracker.update_miss()
+    locked_count = 0
+
+    for tracker in active_trackers:
+        if tracker.is_locked:
+            locked_count += 1
+            cv2.circle(frame, (int(tracker.cx), int(tracker.cy)), int(tracker.radius), (0, 255, 0), 3)
+            cv2.circle(frame, (int(tracker.cx), int(tracker.cy)), 4, (0, 0, 255), -1)
+            text = f"BALL: {tracker.confidence*100:.0f}%"
+            cv2.putText(frame, text, (tracker.x, tracker.y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    #Throw away trash
+    active_trackers = [t for t in active_trackers if t.lost_frame_counter < t.max_lost_frames]
+
+    if locked_count == 0:
+        cv2.putText(frame, "SEARCHING...", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     
     cv2.imshow("FTC High-Speed Vision", frame)
     
