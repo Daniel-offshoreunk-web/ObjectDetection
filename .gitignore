@@ -1,0 +1,4 @@
+*.local.md
+*.local.py
+.venv/*
+__pycache__/*
