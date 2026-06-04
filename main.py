@@ -67,6 +67,7 @@ def ai_predict(circularity, aspect_ratio):
 active_trackers = []
 
 def runPipeline(image, ll_robot_inputs):
+    global active_trackers
     blurred = cv2.GaussianBlur(image, (11, 11), 0)
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     
@@ -86,13 +87,25 @@ def runPipeline(image, ll_robot_inputs):
         if 50000 > area > 1000:
             x, y, w, h = cv2.boundingRect(contour)
             aspect_ratio = float(w) / h
+            
             ((cx, cy), radius) = cv2.minEnclosingCircle(contour)
-            circularity = area / (np.pi * (radius ** 2))
             
-            confidence = ai_predict(circularity, aspect_ratio)
+            # It is probably there
+            inferred_circle_area = np.pi * (radius ** 2)
+            raw_circularity = area / inferred_circle_area
+            if 0.40 <= raw_circularity <= 0.82 and 0.70 <= aspect_ratio <= 1.40:
+                ai_input_circularity = 0.95
+                is_occluded = True
+            else:
+                ai_input_circularity = raw_circularity
+                is_occluded = False
             
-            if confidence >= 0.9 and circularity > 0.8:
-                detected_blobs.append((cx, cy, radius, confidence, x, y))
+            # Ball?
+            confidence = ai_predict(ai_input_circularity, aspect_ratio)
+            
+            if confidence >= 0.88:
+                display_conf = confidence if not is_occluded else confidence * 0.98
+                detected_blobs.append((cx, cy, radius, display_conf, x, y))
 
     for tracker in active_trackers:
         tracker.updated_this_frame = False
